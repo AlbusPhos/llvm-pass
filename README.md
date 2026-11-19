@@ -3,7 +3,7 @@
 > A framework for writing LLVM pass plugins in Rust via cxx FFI (LLVM 18-22)
 
 [![Type](https://img.shields.io/badge/Type-Library-informational)](#快速开始-quick-start)
-[![License](https://img.shields.io/github/license/AlbusPhos/llvm-pass)](#开源协议-license)
+[![License](https://img.shields.io/crates/l/llvm-pass)](#开源协议-license)
 
 ---
 
