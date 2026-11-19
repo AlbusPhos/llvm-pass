@@ -1,6 +1,6 @@
 [package]
 name = "llvm-pass"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["AlbusPhos <owo.zzz@proton.me>"]
 description = "A framework for writing LLVM pass plugins in Rust via cxx FFI (LLVM 18-22)"
@@ -28,3 +28,6 @@ cxx = "1.0"
 [build-dependencies]
 cxx-build = "1.0"
 
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["llvm21"]

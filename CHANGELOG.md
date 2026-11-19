@@ -13,6 +13,23 @@
 
 ## [Unreleased]
 
+---
+
+## [0.1.1] - 2026-11-19
+
+### Added
+
+- 在 crate 根启用 `#![cfg_attr(docsrs, feature(doc_cfg))]`，为 docs.rs 文档构建启用 feature 标注支持。
+
+### Changed
+
+- 调整 docs.rs 构建配置：关闭默认特性并固定使用 `llvm21` 特性构建文档，避免默认的 `llvm22` 在文档构建环境不可用。
+- README 的依赖示例改用 crates.io 版本依赖 `llvm-pass = "0.1"`，不再引导用户使用 git 依赖。
+
+---
+
+## [0.1.0] - 2026-11-19
+
 ### Added
 
 - 完成初始框架实现：通过 `cxx` 在 Rust 与 LLVM C++ Pass API 之间建立桥接，可用 Rust trait 或闭包编写 Module / Function Pass，并产出可供 `opt`、`clang`、`rustc` 加载的 `cdylib` 插件（同时保留 `rlib` 供库方式复用）。

@@ -22,10 +22,9 @@ LLVM 版本通过 Cargo 特性选择（`llvm18` ~ `llvm22`），默认启用 `ll
 ```toml
 [dependencies]
 # 默认启用 llvm22
-llvm-pass = { git = "https://github.com/AlbusPhos/llvm-pass.git" }
-
+llvm-pass = "0.1"
 # 或显式选择其他 LLVM 版本（必须与宿主工具链一致）
-# llvm-pass = { git = "https://github.com/AlbusPhos/llvm-pass.git", default-features = false, features = ["llvm18"] }
+# llvm-pass = { version = "0.1", default-features = false, features = ["llvm18"] }
 ```
 
 插件工程需将自身声明为 `cdylib`：
