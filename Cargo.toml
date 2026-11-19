@@ -1,0 +1,30 @@
+[package]
+name = "llvm-pass"
+version = "0.1.0"
+edition = "2024"
+authors = ["AlbusPhos <owo.zzz@proton.me>"]
+description = "A framework for writing LLVM pass plugins in Rust via cxx FFI (LLVM 18-22)"
+license = "MPL-2.0"
+readme = "README.md"
+repository = "https://github.com/AlbusPhos/llvm-pass"
+
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+
+[features]
+default = ["llvm22"]
+llvm18 = []
+llvm19 = []
+llvm20 = []
+llvm21 = []
+llvm22 = []
+
+
+[dependencies]
+cxx = "1.0"
+
+[build-dependencies]
+cxx-build = "1.0"
+

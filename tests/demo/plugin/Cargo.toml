@@ -1,0 +1,18 @@
+[package]
+name = "demo_plugin"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = ["llvm22"]
+llvm18 = ["llvm-pass/llvm18"]
+llvm19 = ["llvm-pass/llvm19"]
+llvm20 = ["llvm-pass/llvm20"]
+llvm21 = ["llvm-pass/llvm21"]
+llvm22 = ["llvm-pass/llvm22"]
+
+[dependencies]
+llvm-pass = { path = "../../..", default-features = false }

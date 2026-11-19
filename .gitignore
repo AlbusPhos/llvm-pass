@@ -1,0 +1,41 @@
+target/
+
+# ========== 构建产物补充 ==========
+**/*.rs.bk
+*.pdb
+*.log
+
+# ========== 敏感文件 ==========
+*.key
+.env
+.env.*
+!.env.example
+*.pem
+*.private.key
+id_rsa
+id_rsa.pub
+*credentials*.json
+*credentials*.yaml
+*credentials*.yml
+*secret*.json
+*secret*.yaml
+*secret*.yml
+*secret*.txt
+*secret*.bin
+.secrets/
+
+# ========== 编辑器/IDE ==========
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+
+.DS_Store
+Thumbs.db
+
+*.swp
+*.swo
+*~
+
+.direnv/
+.envrc.local
