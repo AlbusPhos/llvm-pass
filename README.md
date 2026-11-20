@@ -20,12 +20,12 @@ LLVM 版本通过 Cargo 特性选择（`llvm18` ~ `llvm22`），默认启用 `ll
 ```toml
 [dependencies]
 # 默认启用 llvm22
-llvm-pass = "0.1"
+llvm-pass = "0.2"
 # 或显式选择其他 LLVM 版本（必须与宿主工具链一致）
-# llvm-pass = { version = "0.1", default-features = false, features = ["llvm18"] }
+# llvm-pass = { version = "0.2", default-features = false, features = ["llvm18"] }
 # 可选：启用 inkwell 互操作层（LLVM 版本会自动匹配，并重导出 llvm_pass::inkwell）
-# llvm-pass = { version = "0.1", features = ["inkwell"] }
-# llvm-pass = { version = "0.1", default-features = false, features = ["llvm21", "inkwell"] }
+# llvm-pass = { version = "0.2", features = ["inkwell"] }
+# llvm-pass = { version = "0.2", default-features = false, features = ["llvm21", "inkwell"] }
 ```
 
 插件工程需将自身声明为 `cdylib`：
