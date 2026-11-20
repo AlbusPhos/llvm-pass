@@ -11,6 +11,29 @@
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- `ModuleRef` / `FunctionRef` 内聚 `ModuleAnalysisManager` / `FunctionAnalysisManager`，新增 `analysis` / `cached_analysis`、`ModuleRef::for_each_function`（经 FAM 代理遍历函数）以及 `invalidate_analyses`。
+- 新增内置分析标记：`DominatorTreeAnalysis`、`PostDominatorTreeAnalysis`、`LoopAnalysis`、`CallGraphAnalysis`、`GlobalsAA`，以及对应结果视图 `DominatorTree` / `PostDominatorTree` / `LoopInfo` / `CallGraph` / `GlobalsAAResult`。
+- 新增 `ModuleRef::call_graph` / `globals_aa` 与 `FunctionRef::dominator_tree` / `post_dominator_tree` / `loop_info` 便捷入口。
+- 新增跨层级缓存查询 `FunctionRef::cached_module_analysis`（仅支持永不失效的模块级分析，内置实现为 `GlobalsAA`）。
+- `PreservedAnalyses` 新增 `preserve::<A>()`、`preserve_function_analyses_proxy()`、`is_all` / `is_none` / `is_preserved::<A>()` 链式 API。
+- 演示插件与集成测试覆盖模块/函数级分析的惰性计算、缓存与失效，跨层级 `GlobalsAA` 查询，以及配合 `inkwell` 的基本块查询。
+- 新增 GitHub Actions CI：按 LLVM 18 ~ 22 矩阵运行 clippy 与测试（含 `inkwell` 组合）、MSRV 1.88 检查，以及 docs.rs 配置模拟。
+- 新增基于 `v*.*.*` tag 的发布工作流：校验 tag 与 `Cargo.toml` 版本一致后运行测试、发布 crates.io 并创建 GitHub Release。
+
+### Changed
+
+- [BREAKING] `PreservedAnalyses` 由 `ffi::PreservedAnalysesKind` 枚举别名改为位掩码结构体；`All` / `PreserveCFG` / `None` 常量用法保持兼容，`ffi::PreservedAnalysesKind` 不再导出。
+- `Cargo.toml` 声明 `rust-version = "1.88"`，与 CI 的 MSRV 检查保持一致。
+- `ModuleRef::as_inkwell` / `with_inkwell` 与 `FunctionRef::as_inkwell` / `with_inkwell` 由 `&mut self` 改为 `&self`，便于与共享借用的分析结果混用；原调用写法无需修改。
+- 内部实现按职责拆分为 `analysis`、`ir`、`pass` 子模块，`#[cxx::bridge]`、FFI 胶水与插件入口保留在 crate 根；公开类型仍从 crate 根扁平导出，无 API 变更。
+- README 同步补充分析管理器使用方式与 API 预览。
+
+---
+
 ## [0.1.2] - 2026-11-20
 
 ### Added

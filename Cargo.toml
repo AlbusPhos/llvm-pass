@@ -2,6 +2,7 @@
 name = "llvm-pass"
 version = "0.1.2"
 edition = "2024"
+rust-version = "1.88"
 authors = ["AlbusPhos <owo.zzz@proton.me>"]
 description = "A framework for writing LLVM pass plugins in Rust via cxx FFI (LLVM 18-22)"
 license = "MPL-2.0"

@@ -2,7 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use llvm_pass::{LLVM_VERSION_MAJOR, split_parametrized_pass_name};
+use llvm_pass::{
+    CallGraphAnalysis, DominatorTreeAnalysis, LLVM_VERSION_MAJOR, LoopAnalysis,
+    PostDominatorTreeAnalysis, PreservedAnalyses, split_parametrized_pass_name,
+};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -86,6 +89,38 @@ fn test_split_parametrized_pass_name() {
     assert_eq!(split_parametrized_pass_name("bcf>prob=80"), None);
 }
 
+#[test]
+fn test_preserved_analyses_masks_and_chaining() {
+    // 内置常量语义
+    assert!(PreservedAnalyses::All.is_all());
+    assert!(!PreservedAnalyses::All.is_none());
+    assert!(PreservedAnalyses::None.is_none());
+    assert!(PreservedAnalyses::PreserveCFG.is_preserved::<DominatorTreeAnalysis>());
+    assert!(PreservedAnalyses::PreserveCFG.is_preserved::<PostDominatorTreeAnalysis>());
+    assert!(PreservedAnalyses::PreserveCFG.is_preserved::<LoopAnalysis>());
+    assert!(!PreservedAnalyses::PreserveCFG.is_preserved::<CallGraphAnalysis>());
+    assert!(!PreservedAnalyses::None.is_preserved::<DominatorTreeAnalysis>());
+
+    // 链式声明只影响指定分析
+    let pa = PreservedAnalyses::None
+        .preserve::<CallGraphAnalysis>()
+        .preserve_function_analyses_proxy();
+    assert!(pa.is_preserved::<CallGraphAnalysis>());
+    assert!(!pa.is_preserved::<DominatorTreeAnalysis>());
+    assert!(!pa.is_all());
+    assert!(!pa.is_none());
+
+    // All 不受链式声明影响
+    assert_eq!(
+        PreservedAnalyses::All.preserve::<CallGraphAnalysis>(),
+        PreservedAnalyses::All
+    );
+    assert_eq!(
+        PreservedAnalyses::All.preserve_function_analyses_proxy(),
+        PreservedAnalyses::All
+    );
+}
+
 static PLUGIN_DYLIB_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 fn get_plugin_dylib() -> &'static Path {
@@ -167,6 +202,36 @@ fn test_opt_custom_pipeline_and_params() {
     assert!(stderr.contains("[TRACE] FunctionPass::run func=target_func_b params=prob=80;loop=3"));
     assert!(stderr.contains("[TRACE] FunctionPass::run func=target_func_a params=default"));
     assert!(stderr.contains("[TRACE] FunctionPass::run func=target_func_b params=default"));
+}
+
+#[test]
+fn test_analysis_invalidation() {
+    let plugin = get_plugin_dylib();
+    let ir_file = demo_src("c.ll");
+    let opt_bin = llvm_tool("opt");
+
+    let output = Command::new(&opt_bin)
+        .arg(format!("-load-pass-plugin={}", plugin.display()))
+        .arg("-passes=demo-invalidate,function(demo-invalidate-fn)")
+        .arg("-disable-output")
+        .arg(&ir_file)
+        .output()
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to execute {:?} for invalidation test: {}",
+                opt_bin, e
+            )
+        });
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "`opt-{LLVM_VERSION_MAJOR}` invalidation pipeline failed:\n{}",
+        stderr
+    );
+    assert!(stderr.contains("[TRACE] ModuleAnalysisInvalidation::run module="));
+    assert!(stderr.contains("[TRACE] FunctionAnalysisInvalidation::run func=target_func_a"));
+    assert!(stderr.contains("[TRACE] FunctionAnalysisInvalidation::run func=target_func_b"));
 }
 
 #[test]

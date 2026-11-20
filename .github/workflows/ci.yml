@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+  test:
+    name: LLVM ${{ matrix.llvm }}${{ matrix.inkwell && ' + inkwell' || '' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - llvm: "18"
+            rustc: "1.79.0"
+            inkwell: false
+          - llvm: "19"
+            rustc: "1.82.0"
+            inkwell: false
+          - llvm: "20"
+            rustc: "1.88.0"
+            inkwell: false
+          - llvm: "21"
+            rustc: "1.92"
+            inkwell: false
+          - llvm: "22"
+            rustc: "1.98.0"
+            inkwell: false
+          - llvm: "21"
+            rustc: "1.92"
+            inkwell: true
+          - llvm: "22"
+            rustc: "1.98.0"
+            inkwell: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install LLVM ${{ matrix.llvm }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget lsb-release software-properties-common gnupg
+          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- ${{ matrix.llvm }}
+          sudo apt-get install -y llvm-${{ matrix.llvm }}-dev clang-${{ matrix.llvm }}
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install rustc toolchain for LLVM integration (best effort)
+        run: rustup toolchain install "${{ matrix.rustc }}" --profile minimal || true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: llvm-${{ matrix.llvm }}-${{ matrix.inkwell }}
+
+      - name: Configure LLVM environment
+        run: |
+          set -euo pipefail
+          echo "LLVM_CONFIG_PATH=/usr/bin/llvm-config-${{ matrix.llvm }}" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_$(( ${{ matrix.llvm }} * 10 + 1 ))_PREFIX=/usr/lib/llvm-${{ matrix.llvm }}" >> "$GITHUB_ENV"
+          echo "LLVM_PASS_RUSTC_TOOLCHAIN=${{ matrix.rustc }}" >> "$GITHUB_ENV"
+          FEATURES="llvm${{ matrix.llvm }}"
+          if [ "${{ matrix.inkwell }}" = "true" ]; then
+            FEATURES="$FEATURES,inkwell"
+          fi
+          echo "FEATURES=$FEATURES" >> "$GITHUB_ENV"
+
+      - name: clippy
+        run: cargo clippy --all-targets --no-default-features --features "$FEATURES" -- -D warnings
+
+      - name: test
+        run: cargo test --no-default-features --features "$FEATURES" --locked
+
+  msrv:
+    name: MSRV 1.88 + LLVM 22
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install LLVM 22
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget lsb-release software-properties-common gnupg
+          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
+          sudo apt-get install -y llvm-22-dev clang-22
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-1.88-llvm22
+
+      - name: Configure LLVM environment
+        run: |
+          echo "LLVM_CONFIG_PATH=/usr/bin/llvm-config-22" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+
+      - name: cargo check (MSRV)
+        run: cargo check --all-targets --no-default-features --features llvm22 --locked
+
+  docs:
+    name: docs.rs simulation (LLVM 21 + inkwell)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install LLVM 21
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget lsb-release software-properties-common gnupg
+          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 21
+          sudo apt-get install -y llvm-21-dev clang-21
+
+      - name: Install Rust stable and nightly
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install nightly
+        run: rustup toolchain install nightly --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: docs-llvm21-inkwell
+
+      - name: Configure LLVM environment
+        run: |
+          echo "LLVM_CONFIG_PATH=/usr/bin/llvm-config-21" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_211_PREFIX=/usr/lib/llvm-21" >> "$GITHUB_ENV"
+
+      - name: doc build (stable, deny warnings)
+        env:
+          RUSTDOCFLAGS: -D warnings -D rustdoc::broken_intra_doc_links
+        run: cargo +stable doc --no-deps --no-default-features --features llvm21,inkwell --locked
+
+      - name: doc build (docsrs cfg, deny warnings)
+        env:
+          RUSTDOCFLAGS: --cfg docsrs -D warnings -D rustdoc::broken_intra_doc_links
+        run: cargo +nightly doc --no-deps --no-default-features --features llvm21,inkwell --locked

@@ -12,6 +12,35 @@ impl ModulePass for DemoModulePass {
             !module.as_raw_ptr().is_null(),
             "Module raw ptr must not be null"
         );
+        assert!(
+            !module.analysis_manager_raw_ptr().is_null(),
+            "ModuleAnalysisManager raw ptr must not be null"
+        );
+        // 测试模块级分析 CallGraph 的惰性计算与缓存读取
+        let cg = module.call_graph();
+        assert!(!cg.as_raw_ptr().is_null());
+        assert!(module.cached_analysis::<CallGraphAnalysis>().is_some());
+
+        // GlobalsAA 是 LLVM 的"永不失效"模块分析，可从函数级跨层级查询
+        let gaa = module.globals_aa();
+        assert!(!gaa.as_raw_ptr().is_null());
+        assert!(module.cached_analysis::<GlobalsAA>().is_some());
+
+        // 测试在 ModulePass 中遍历函数并跨层级查询分析
+        let mut analyzed = 0usize;
+        module.for_each_function(|func| {
+            if !func.is_declaration() {
+                let _dt = func.dominator_tree();
+                let _li = func.loop_info();
+                assert!(
+                    func.cached_module_analysis::<GlobalsAA>().is_some(),
+                    "GlobalsAA should be cached in the outer ModuleAnalysisManager"
+                );
+                analyzed += 1;
+            }
+        });
+        assert!(analyzed > 0, "expected at least one function definition");
+
         eprintln!("[TRACE] ModulePass::run on module={}", module.name());
         PreservedAnalyses::All
     }
@@ -31,16 +60,33 @@ impl FunctionPass for DemoFunctionPass {
             !func.as_raw_ptr().is_null(),
             "Function raw ptr must not be null"
         );
+        assert!(
+            !func.analysis_manager_raw_ptr().is_null(),
+            "FunctionAnalysisManager raw ptr must not be null"
+        );
         if func.is_declaration() {
             eprintln!("[TRACE] FunctionPass::skip_decl func={}", func.name());
             return PreservedAnalyses::All;
         }
+
+        // 同时获取多个函数级分析（共享借用互不冲突）
+        let dt = func.dominator_tree();
+        let pdt = func.post_dominator_tree();
+        let li = func.loop_info();
+        assert!(!dt.as_raw_ptr().is_null());
+        assert!(!pdt.as_raw_ptr().is_null());
+        assert!(!li.as_raw_ptr().is_null());
+
         eprintln!(
-            "[TRACE] FunctionPass::run func={} params={}",
+            "[TRACE] FunctionPass::run func={} params={} loops={}",
             func.name(),
-            self.params
+            self.params,
+            li.top_level_loops_count()
         );
+
         PreservedAnalyses::PreserveCFG
+            .preserve::<DominatorTreeAnalysis>()
+            .preserve::<LoopAnalysis>()
     }
 }
 
@@ -83,7 +129,7 @@ export_llvm_plugin! {
             eprintln!("[TRACE] EP::ScalarOptimizerLate level={:?}", level);
         });
 
-        // 2. 测试 Module 级命令行管线解析 (-passes="demo-mod" / "demo-panic" / "demo-inkwell-mod")
+        // 2. 测试 Module 级命令行管线解析
         pb.register_module_pipeline_parsing_callback(|name, mpm| {
             match name {
                 "demo-mod" => {
@@ -93,6 +139,12 @@ export_llvm_plugin! {
                 "demo-mod-closure" => {
                     mpm.add_pass(|m: &mut ModuleRef<'_>| {
                         eprintln!("[TRACE] ClosureModulePass::run module={}", m.name());
+                        // 测试在 ModulePass 中通过 InnerAnalysisManagerProxy 遍历函数并查询函数级分析
+                        m.for_each_function(|func| {
+                            if !func.is_declaration() {
+                                let _dt = func.dominator_tree();
+                            }
+                        });
                         PreservedAnalyses::None
                     });
                     true
@@ -103,14 +155,28 @@ export_llvm_plugin! {
                     });
                     true
                 }
+                "demo-invalidate" => {
+                    mpm.add_pass(|m: &mut ModuleRef<'_>| {
+                        let _cg = m.call_graph();
+                        assert!(
+                            m.cached_analysis::<CallGraphAnalysis>().is_some(),
+                            "CallGraph should be cached before invalidation"
+                        );
+                        m.invalidate_analyses(PreservedAnalyses::None);
+                        assert!(
+                            m.cached_analysis::<CallGraphAnalysis>().is_none(),
+                            "CallGraph should be invalidated"
+                        );
+                        eprintln!("[TRACE] ModuleAnalysisInvalidation::run module={}", m.name());
+                        PreservedAnalyses::None
+                    });
+                    true
+                }
                 #[cfg(feature = "inkwell")]
                 "demo-inkwell-mod" => {
                     mpm.add_pass(|m: &mut ModuleRef<'_>| {
-                        // 测试 as_inkwell() 与 Deref
                         let fn_count = m.as_inkwell().get_functions().count();
                         eprintln!("[TRACE] InkwellModule::as_inkwell fn_count={}", fn_count);
-
-                        // 测试 with_inkwell() 与模块级 IR 修改（注入全局变量）
                         m.with_inkwell(|iw_mod, ctx| {
                             let i32_ty = ctx.i32_type();
                             let global = iw_mod.add_global(i32_ty, None, "__inkwell_injected_global");
@@ -125,27 +191,55 @@ export_llvm_plugin! {
             }
         });
 
-        // 3. 测试 Function 级命令行管线解析 (-passes="demo-fn<...>" / "demo-inkwell-fn")
+        // 3. 测试 Function 级命令行管线解析
         pb.register_function_pipeline_parsing_callback(|full_name, fpm| {
+            if full_name == "demo-invalidate-fn" {
+                fpm.add_pass(|func: &mut FunctionRef<'_>| {
+                    if func.is_declaration() {
+                        return PreservedAnalyses::All;
+                    }
+                    let _dt = func.dominator_tree();
+                    assert!(
+                        func.cached_analysis::<DominatorTreeAnalysis>().is_some(),
+                        "DominatorTree should be cached before invalidation"
+                    );
+                    func.invalidate_analyses(PreservedAnalyses::None);
+                    assert!(
+                        func.cached_analysis::<DominatorTreeAnalysis>().is_none(),
+                        "DominatorTree should be invalidated"
+                    );
+                    eprintln!(
+                        "[TRACE] FunctionAnalysisInvalidation::run func={}",
+                        func.name()
+                    );
+                    PreservedAnalyses::None
+                });
+                return true;
+            }
+
             #[cfg(feature = "inkwell")]
             if full_name == "demo-inkwell-fn" {
                 fpm.add_pass(|func: &mut FunctionRef<'_>| {
                     if func.is_declaration() {
                         return PreservedAnalyses::All;
                     }
-                    // 测试 as_inkwell()
+                    // 同时持有 DominatorTree、LoopInfo 并配合 inkwell 操作基本块
+                    let dt = func.dominator_tree();
+                    let li = func.loop_info();
                     let bb_count = func.as_inkwell().count_basic_blocks();
                     eprintln!(
                         "[TRACE] InkwellFunction::as_inkwell func={} bb_count={}",
                         func.name(),
                         bb_count
                     );
-
-                    // 测试 with_inkwell() 与函数级 IR 修改（使用 Builder 插入指令）
                     func.with_inkwell(|iw_fn, ctx| {
                         if let (Some(entry_bb), Some(first_param)) =
                             (iw_fn.get_first_basic_block(), iw_fn.get_first_param())
                         {
+                            assert!(dt.is_reachable_from_entry(entry_bb));
+                            assert!(dt.dominates(entry_bb, entry_bb));
+                            let _depth = li.loop_depth(entry_bb);
+
                             let builder = ctx.create_builder();
                             if let Some(first_inst) = entry_bb.get_first_instruction() {
                                 builder.position_before(&first_inst);

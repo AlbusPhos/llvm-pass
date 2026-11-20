@@ -2,6 +2,8 @@
 
 > A framework for writing LLVM pass plugins in Rust via cxx FFI (LLVM 18-22)
 
+[![CI](https://img.shields.io/github/actions/workflow/status/AlbusPhos/llvm-pass/ci.yml?label=CI&logo=githubactions&logoColor=white)](https://github.com/AlbusPhos/llvm-pass/actions/workflows/ci.yml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue)](Cargo.toml)
 [![Type](https://img.shields.io/badge/Type-Library-informational)](#快速开始-quick-start)
 [![License](https://img.shields.io/crates/l/llvm-pass)](#开源协议-license)
 
@@ -106,6 +108,60 @@ rustc +nightly-2026-06-15 -Z llvm-plugins=./target/release/libmy_plugin.so \
   -C opt-level=2 --emit=llvm-ir src.rs
 ```
 
+### 使用分析管理器 (Analysis Manager)
+
+`ModuleRef` / `FunctionRef` 已内聚对应的 `ModuleAnalysisManager` / `FunctionAnalysisManager`，可直接惰性计算或读取缓存分析：
+
+```rust
+use llvm_pass::*;
+
+fn inspect(module: &mut ModuleRef<'_>) -> PreservedAnalyses {
+    // 模块级分析：惰性计算 CallGraph
+    let _cg = module.call_graph();
+
+    // 在模块 Pass 中遍历函数，并查询函数级分析与跨层级模块分析
+    module.for_each_function(|func| {
+        if !func.is_declaration() {
+            let dt = func.dominator_tree();
+            let li = func.loop_info();
+            // GlobalsAA 是 LLVM 的"永不失效"分析，可从函数级跨层级读取
+            let _gaa = func.cached_module_analysis::<GlobalsAA>();
+            let _has_loops = !li.is_empty();
+            assert!(!dt.as_raw_ptr().is_null());
+        }
+    });
+
+    PreservedAnalyses::All
+}
+```
+
+> 启用 `inkwell` 特性后，可用 `DominatorTree::dominates`、`LoopInfo::loop_depth` 等方法直接查询 `inkwell` 基本块，详见 `tests/demo/plugin`。
+
+内置分析类型与便捷入口：
+
+| 标记类型                    | 层级             | 便捷入口                           | 结果视图            |
+|:----------------------------|:-----------------|:-----------------------------------|:--------------------|
+| `DominatorTreeAnalysis`     | 函数             | `FunctionRef::dominator_tree`      | `DominatorTree`     |
+| `PostDominatorTreeAnalysis` | 函数             | `FunctionRef::post_dominator_tree` | `PostDominatorTree` |
+| `LoopAnalysis`              | 函数             | `FunctionRef::loop_info`           | `LoopInfo`          |
+| `CallGraphAnalysis`         | 模块             | `ModuleRef::call_graph`            | `CallGraph`         |
+| `GlobalsAA`                 | 模块（可跨层级） | `ModuleRef::globals_aa`            | `GlobalsAAResult`   |
+
+- `analysis::<A>()` 惰性计算或复用缓存；`cached_analysis::<A>()` 只读取已缓存结果。
+- `invalidate_analyses(pa)` 立即失效指定范围，借用检查器保证不会与存活的分析结果引用重叠。
+- `PreservedAnalyses` 支持链式保留声明：
+
+```rust
+use llvm_pass::*;
+
+let pa = PreservedAnalyses::PreserveCFG
+    .preserve::<DominatorTreeAnalysis>()
+    .preserve::<LoopAnalysis>();
+assert!(pa.is_preserved::<LoopAnalysis>());
+```
+
+- `CallGraphAnalysis` 等可失效的模块级分析只能通过 `ModuleRef` 查询；跨层级入口 `FunctionRef::cached_module_analysis` 仅适用于 LLVM 的"永不失效"模块分析（内置实现为 `GlobalsAA`），否则 LLVM 调试构建会触发 `Cached result cannot be invalidated` 断言。
+
 ## LLVM 版本特性 (LLVM Version Features)
 
 | Feature          | 对应 LLVM | `PassPluginLibraryInfo` API |
@@ -142,17 +198,20 @@ LLVM_SYS_191_PREFIX=/opt/llvm-19 \
 
 ### 核心组件速查
 
-| 核心入口 / 类型                                  | 角色定位         | 职责说明                                                                                 |
-|:-------------------------------------------------|:-----------------|:-----------------------------------------------------------------------------------------|
-| `export_llvm_plugin!`                            | **插件入口**     | 生成 `llvmGetPassPluginInfo`，供 `opt` / `clang` 加载                                    |
-| `ModulePass` / `FunctionPass`                    | **扩展契约**     | 实现此 trait 定义自定义 Pass，返回的 `PreservedAnalyses` 决定分析失效范围                |
-| `ModuleRef` / `FunctionRef`                      | **IR 视图**      | 读取模块/函数名、判断声明、获取裸指针以对接 LLVM API                                     |
-| `InkwellModule` / `as_inkwell` / `with_inkwell`  | **Inkwell 桥接** | 启用 `inkwell` 特性后以 `inkwell` API 安全读写 IR（同时重导出 `llvm_pass::inkwell`）     |
-| `PassBuilder`                                    | **注册中心**     | 注册 6 类管线扩展点与 Module/Function 级自定义 pass 名解析                               |
-| `ModulePassManager` / `FunctionPassManager`      | **Pass 容器**    | 向对应层级管线挂载 Pass                                                                  |
-| `PreservedAnalyses` / `OptLevel` / `LtoPhase`    | **值类型**       | 向 Rust 回调传递 LLVM 侧分析结果与优化级别、LTO 阶段                                     |
-| `LLVM_VERSION_MAJOR` / `LLVM_PLUGIN_API_VERSION` | **版本信息**     | 当前绑定的 LLVM 主版本号与插件 ABI 版本                                                  |
-| `split_parametrized_pass_name`                   | **辅助函数**     | 解析 `name<key=value;...>` 形式的参数化 pass 名                                          |
+| 核心入口 / 类型                                  | 角色定位         | 职责说明                                                                             |
+|:-------------------------------------------------|:-----------------|:-------------------------------------------------------------------------------------|
+| `export_llvm_plugin!`                            | **插件入口**     | 生成 `llvmGetPassPluginInfo`，供 `opt` / `clang` 加载                                |
+| `ModulePass` / `FunctionPass`                    | **扩展契约**     | 实现此 trait 定义自定义 Pass，返回的 `PreservedAnalyses` 决定分析失效范围            |
+| `ModuleRef` / `FunctionRef`                      | **IR + AM 视图** | 读取模块/函数名与裸指针，内聚 `ModuleAnalysisManager` / `FunctionAnalysisManager`    |
+| `ModuleRef::analysis` / `cached_analysis`        | **分析入口**     | 惰性计算或读取缓存的模块/函数级分析；`for_each_function` 支持模块内遍历函数          |
+| `DominatorTree( Analysis )` / `LoopInfo`         | **函数级分析**   | 支配树、后支配树、循环信息及其基本块查询（配合 `inkwell` 使用）                      |
+| `CallGraph( Analysis )` / `GlobalsAA`            | **模块级分析**   | 调用图（仅模块级）与永不失效的全局别名分析（支持从函数级跨层级查询）                 |
+| `InkwellModule` / `as_inkwell` / `with_inkwell`  | **Inkwell 桥接** | 启用 `inkwell` 特性后以 `inkwell` API 安全读写 IR（同时重导出 `llvm_pass::inkwell`） |
+| `PassBuilder`                                    | **注册中心**     | 注册 6 类管线扩展点与 Module/Function 级自定义 pass 名解析                           |
+| `ModulePassManager` / `FunctionPassManager`      | **Pass 容器**    | 向对应层级管线挂载 Pass                                                              |
+| `PreservedAnalyses` / `OptLevel` / `LtoPhase`    | **值类型**       | 保留集合（`All` / `PreserveCFG` / `None` / `preserve::<A>()`）、优化级别与 LTO 阶段  |
+| `LLVM_VERSION_MAJOR` / `LLVM_PLUGIN_API_VERSION` | **版本信息**     | 当前绑定的 LLVM 主版本号与插件 ABI 版本                                              |
+| `split_parametrized_pass_name`                   | **辅助函数**     | 解析 `name<key=value;...>` 形式的参数化 pass 名                                      |
 
 ## 贡献 (Contributing)
 
