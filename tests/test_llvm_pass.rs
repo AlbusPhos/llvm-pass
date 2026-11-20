@@ -95,22 +95,22 @@ fn get_plugin_dylib() -> &'static Path {
         // 按 LLVM 版本隔离构建目录，避免切换 feature 时复用旧版本缓存。
         let target_dir =
             manifest_dir.join(format!("target/test-plugin-build-llvm{LLVM_VERSION_MAJOR}"));
-        let feature = format!("llvm{LLVM_VERSION_MAJOR}");
-
+        let mut features = format!("llvm{LLVM_VERSION_MAJOR}");
+        if cfg!(feature = "inkwell") {
+            features.push_str(",inkwell");
+        }
         let status = Command::new(env!("CARGO"))
             .arg("build")
             .arg("--manifest-path")
             .arg(plugin_dir.join("Cargo.toml"))
             .arg("--no-default-features")
             .arg("--features")
-            .arg(&feature)
+            .arg(&features)
             .arg("--target-dir")
             .arg(&target_dir)
             .status()
             .expect("Failed to invoke cargo to build demo_plugin");
-
         assert!(status.success(), "Failed to compile tests/demo/plugin");
-
         let dylib_name = format!(
             "{}demo_plugin.{}",
             env::consts::DLL_PREFIX,
@@ -319,4 +319,51 @@ fn test_rustc_llvm_plugin_integration() {
     assert!(output.status.success(), "`rustc` failed:\n{}", stderr);
     assert!(stderr.contains("[TRACE] EP::PipelineStart level=O2"));
     assert!(stderr.contains("[TRACE] ClosureFunctionPass::run func=compute_rust"));
+}
+
+#[cfg(feature = "inkwell")]
+#[test]
+fn test_opt_inkwell_ir_inspection_and_mutation() {
+    let plugin = get_plugin_dylib();
+    let ir_file = demo_src("c.ll");
+    let opt_bin = llvm_tool("opt");
+
+    let output = Command::new(&opt_bin)
+        .arg(format!("-load-pass-plugin={}", plugin.display()))
+        .arg("-passes=demo-inkwell-mod,function(demo-inkwell-fn)")
+        .arg("-S")
+        .arg(&ir_file)
+        .output()
+        .unwrap_or_else(|e| panic!("Failed to execute {:?} for inkwell test: {}", opt_bin, e));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "`opt-{LLVM_VERSION_MAJOR}` inkwell pipeline failed:\n{}",
+        stderr
+    );
+
+    // 1. 验证 stderr 中的 Inkwell IR 读取统计信息（c.ll 中共有 3 个函数：1 个声明 + 2 个定义）
+    assert!(stderr.contains("[TRACE] InkwellModule::as_inkwell fn_count=3"));
+    assert!(stderr.contains("[TRACE] InkwellFunction::as_inkwell func=target_func_a bb_count=1"));
+    assert!(stderr.contains("[TRACE] InkwellFunction::as_inkwell func=target_func_b bb_count=1"));
+
+    // 2. 验证 stdout 输出的 LLVM IR 文本中包含 Inkwell 注入的全局变量与指令
+    assert!(
+        stdout.contains("@__inkwell_injected_global = internal global i32 1337"),
+        "Missing injected global variable in output IR:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("%inkwell_injected_add = add i32 %x, 999"),
+        "Missing injected add instruction in target_func_a:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("%inkwell_injected_add = add i32 %y, 999"),
+        "Missing injected add instruction in target_func_b:\n{}",
+        stdout
+    );
 }

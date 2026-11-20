@@ -11,7 +11,17 @@
 
 ---
 
-## [Unreleased]
+## [0.1.2] - 2026-11-20
+
+### Added
+
+- 新增可选 `inkwell` 特性（默认不启用）：启用后重导出与当前 LLVM 版本匹配的 `inkwell`，并提供 `InkwellModule`、`ModuleRef::as_inkwell` / `with_inkwell`、`FunctionRef::as_inkwell` / `with_inkwell`，可在 Pass 中以 `inkwell` API 读写 IR。
+- 新增 `inkwell` 互操作集成测试：通过 `opt` 加载 demo 插件，验证模块/函数级 IR 读取与注入（global 与 add 指令）。
+
+### Changed
+
+- `llvm18` ~ `llvm22` 特性会将所选 LLVM 版本转发给可选的 `inkwell` 依赖；启用 `inkwell` 时使用 `no-llvm-linking` / `no-libffi-linking`，由宿主提供 LLVM 符号。
+- docs.rs 文档构建配置扩展为 `llvm21,inkwell`。
 
 ---
 

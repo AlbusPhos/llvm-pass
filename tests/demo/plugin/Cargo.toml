@@ -13,6 +13,7 @@ llvm19 = ["llvm-pass/llvm19"]
 llvm20 = ["llvm-pass/llvm20"]
 llvm21 = ["llvm-pass/llvm21"]
 llvm22 = ["llvm-pass/llvm22"]
+inkwell = ["llvm-pass/inkwell"]
 
 [dependencies]
 llvm-pass = { path = "../../..", default-features = false }

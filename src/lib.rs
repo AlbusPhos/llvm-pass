@@ -36,6 +36,10 @@ pub const LLVM_VERSION_MAJOR: u32 = 22;
 
 use std::any::Any;
 use std::ffi::{c_char, c_void};
+#[cfg(feature = "inkwell")]
+use std::mem::ManuallyDrop;
+#[cfg(feature = "inkwell")]
+use std::ops::Deref;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -46,7 +50,6 @@ use std::sync::Arc;
 /// [`ModulePass`]、[`FunctionPass`]、[`PassBuilder`] 等安全封装。
 #[cxx::bridge(namespace = "llvm_pass")]
 pub mod ffi {
-
     /// LLVM 优化级别，映射自 `llvm::OptimizationLevel`。
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum OptLevel {
@@ -133,7 +136,6 @@ pub mod ffi {
             pb: Pin<&mut PassBuilder>,
             cb: Box<BoxedFunctionEpCallback>,
         );
-
         fn pb_register_module_pipeline_parser(
             pb: Pin<&mut PassBuilder>,
             cb: Box<BoxedModulePipelineParser>,
@@ -200,6 +202,11 @@ pub mod ffi {
 /// `PreservedAnalyses`（即 `ffi::PreservedAnalysesKind`）用于 Pass 返回值。
 pub use ffi::{LtoPhase, OptLevel, PreservedAnalysesKind as PreservedAnalyses};
 
+/// 重导出 `inkwell` crate，便于下游无需额外声明依赖即可使用匹配的 LLVM 版本类型。
+#[cfg(feature = "inkwell")]
+#[cfg_attr(docsrs, doc(cfg(feature = "inkwell")))]
+pub use inkwell;
+
 /// 模块级 LLVM Pass 的 Rust 侧契约。
 ///
 /// 任何满足 `FnMut(&mut ModuleRef<'_>) -> PreservedAnalyses + Send + Sync + 'static`
@@ -228,7 +235,6 @@ pub trait ModulePass: Send + Sync + 'static {
     fn name(&self) -> &str {
         std::any::type_name::<Self>()
     }
-
     /// 对给定模块执行 Pass，返回分析结果的保留范围。
     fn run(&mut self, module: &mut ModuleRef<'_>) -> PreservedAnalyses;
 }
@@ -265,7 +271,6 @@ pub trait FunctionPass: Send + Sync + 'static {
     fn name(&self) -> &str {
         std::any::type_name::<Self>()
     }
-
     /// 对给定函数执行 Pass，返回分析结果的保留范围。
     fn run(&mut self, func: &mut FunctionRef<'_>) -> PreservedAnalyses;
 }
@@ -323,6 +328,27 @@ pub fn split_parametrized_pass_name(full_name: &str) -> Option<(&str, Option<&st
     }
 }
 
+/// [`inkwell::module::Module`] 的非拥有型借用视图，由 [`ModuleRef::as_inkwell`] 返回。
+///
+/// `inkwell::module::Module` 默认拥有底层 `LLVMModuleRef` 的所有权，在 `Drop` 时会调用
+/// `LLVMDisposeModule` 释放模块。而在 Pass 插件中，模块所有权归属于宿主编译器（如 `opt` / `clang`）。
+/// 本类型通过内部 [`ManuallyDrop`] 屏蔽析构逻辑，并通过 [`Deref`] 暴露
+/// `inkwell::module::Module` 的全部方法，同时防止调用方移动或销毁底层模块。
+#[cfg(feature = "inkwell")]
+#[cfg_attr(docsrs, doc(cfg(feature = "inkwell")))]
+#[derive(Debug)]
+pub struct InkwellModule<'a>(ManuallyDrop<inkwell::module::Module<'a>>);
+
+#[cfg(feature = "inkwell")]
+impl<'a> Deref for InkwellModule<'a> {
+    type Target = inkwell::module::Module<'a>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// LLVM `Module` 的借用视图，作为 [`ModulePass::run`] 的参数传入。
 pub struct ModuleRef<'a>(Pin<&'a mut ffi::Module>);
 
@@ -345,6 +371,69 @@ impl<'a> ModuleRef<'a> {
         // SAFETY: `self.0` 是对已 pin 对象的可变借用；这里只取出指针而不移动目标，
         // 调用方在借用有效期内使用该指针满足 Pin 的约束。
         unsafe { Pin::into_inner_unchecked(self.0.as_mut()) as *mut ffi::Module as *mut c_void }
+    }
+
+    /// 将当前模块转换为 [`InkwellModule`] 视图，以便调用 `inkwell` API。
+    ///
+    /// 返回的视图与从中派生的所有 `inkwell` 值（如 `ContextRef`、`FunctionValue`、`Builder` 等）
+    /// 的生命周期均绑定在当前 `&mut self` 借用上，无法逃逸出 [`ModulePass::run`]。
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use llvm_pass::{ModulePass, ModuleRef, PreservedAnalyses};
+    ///
+    /// fn inspect_with_inkwell(module: &mut ModuleRef<'_>) -> PreservedAnalyses {
+    ///     let iw_mod = module.as_inkwell();
+    ///     let _ctx = iw_mod.get_context();
+    ///     for _func in iw_mod.get_functions() {}
+    ///     PreservedAnalyses::All
+    /// }
+    ///
+    /// let pass = inspect_with_inkwell;
+    /// assert!(!ModulePass::name(&pass).is_empty());
+    /// ```
+    #[cfg(feature = "inkwell")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "inkwell")))]
+    #[inline]
+    pub fn as_inkwell(&mut self) -> InkwellModule<'_> {
+        // SAFETY:
+        // 1. `self.as_raw_ptr()` 返回有效的 `llvm::Module*`，在 LLVM 中与 `LLVMModuleRef` 布局等价。
+        // 2. 使用 `ManuallyDrop` 包装，防止 `inkwell::module::Module::drop` 调用 `LLVMDisposeModule`
+        //    释放由宿主编译器持有的模块。
+        // 3. 返回值生命周期绑定至 `&mut self`，保证借用期间独占且不会逃逸出 Pass 执行周期。
+        let module = unsafe { inkwell::module::Module::new(self.as_raw_ptr().cast()) };
+        InkwellModule(ManuallyDrop::new(module))
+    }
+
+    /// 在闭包中以 `inkwell` 的 [`Module`](inkwell::module::Module) 与 [`ContextRef`](inkwell::context::ContextRef) 操作当前模块。
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use llvm_pass::{ModulePass, ModuleRef, PreservedAnalyses};
+    ///
+    /// fn add_global_pass(module: &mut ModuleRef<'_>) -> PreservedAnalyses {
+    ///     module.with_inkwell(|iw_mod, ctx| {
+    ///         let i32_ty = ctx.i32_type();
+    ///         let _g = iw_mod.add_global(i32_ty, None, "my_global");
+    ///     });
+    ///     PreservedAnalyses::None
+    /// }
+    ///
+    /// let pass = add_global_pass;
+    /// assert!(!ModulePass::name(&pass).is_empty());
+    /// ```
+    #[cfg(feature = "inkwell")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "inkwell")))]
+    #[inline]
+    pub fn with_inkwell<'ctx, R>(
+        &'ctx mut self,
+        f: impl FnOnce(&inkwell::module::Module<'ctx>, inkwell::context::ContextRef<'ctx>) -> R,
+    ) -> R {
+        let module = self.as_inkwell();
+        let ctx = module.get_context();
+        f(&module, ctx)
     }
 }
 
@@ -378,6 +467,71 @@ impl<'a> FunctionRef<'a> {
         // SAFETY: `self.0` 是对已 pin 对象的可变借用；这里只取出指针而不移动目标，
         // 调用方在借用有效期内使用该指针满足 Pin 的约束。
         unsafe { Pin::into_inner_unchecked(self.0.as_mut()) as *mut ffi::Function as *mut c_void }
+    }
+
+    /// 将当前函数转换为 [`inkwell::values::FunctionValue`]，以便调用 `inkwell` API。
+    ///
+    /// 返回的 `FunctionValue` 及其关联 `ContextRef` 的生命周期绑定在当前 `&mut self` 借用上，
+    /// 无法逃逸出 [`FunctionPass::run`]。
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use llvm_pass::{FunctionPass, FunctionRef, PreservedAnalyses};
+    ///
+    /// fn inspect_fn_with_inkwell(func: &mut FunctionRef<'_>) -> PreservedAnalyses {
+    ///     let iw_fn = func.as_inkwell();
+    ///     let _bb_count = iw_fn.count_basic_blocks();
+    ///     PreservedAnalyses::All
+    /// }
+    ///
+    /// let pass = inspect_fn_with_inkwell;
+    /// assert!(!FunctionPass::name(&pass).is_empty());
+    /// ```
+    #[cfg(feature = "inkwell")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "inkwell")))]
+    #[inline]
+    pub fn as_inkwell(&mut self) -> inkwell::values::FunctionValue<'_> {
+        // SAFETY:
+        // 1. `self.as_raw_ptr()` 返回非空且有效的 `llvm::Function*`，与 `LLVMValueRef` 等价。
+        // 2. `FunctionValue` 为 `Copy` 视图类型，无析构副作用，生命周期受 `&mut self` 约束。
+        unsafe {
+            inkwell::values::FunctionValue::new(self.as_raw_ptr().cast())
+                .expect("FunctionRef must hold a valid non-null LLVM Function pointer")
+        }
+    }
+
+    /// 在闭包中以 `inkwell` 的 [`FunctionValue`](inkwell::values::FunctionValue) 与 [`ContextRef`](inkwell::context::ContextRef) 操作当前函数。
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use llvm_pass::{FunctionPass, FunctionRef, PreservedAnalyses};
+    ///
+    /// fn instrument_entry(func: &mut FunctionRef<'_>) -> PreservedAnalyses {
+    ///     if func.is_declaration() {
+    ///         return PreservedAnalyses::All;
+    ///     }
+    ///     func.with_inkwell(|iw_fn, ctx| {
+    ///         let _builder = ctx.create_builder();
+    ///         let _entry = iw_fn.get_first_basic_block();
+    ///     });
+    ///     PreservedAnalyses::PreserveCFG
+    /// }
+    ///
+    /// let pass = instrument_entry;
+    /// assert!(!FunctionPass::name(&pass).is_empty());
+    /// ```
+    #[cfg(feature = "inkwell")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "inkwell")))]
+    #[inline]
+    pub fn with_inkwell<'ctx, R>(
+        &'ctx mut self,
+        f: impl FnOnce(inkwell::values::FunctionValue<'ctx>, inkwell::context::ContextRef<'ctx>) -> R,
+    ) -> R {
+        let func = self.as_inkwell();
+        let ctx = func.get_type().get_context();
+        f(func, ctx)
     }
 }
 
@@ -569,6 +723,7 @@ fn abort_on_panic<R>(context: &str, f: impl FnOnce() -> R) -> R {
 
 /// `cxx` 桥接使用的模块级 Pass 包装类型，通常不直接构造。
 pub struct BoxedModulePass(Box<dyn ModulePass>);
+
 impl BoxedModulePass {
     fn run(&mut self, m: Pin<&mut ffi::Module>) -> PreservedAnalyses {
         match catch_unwind(AssertUnwindSafe(|| {
@@ -587,6 +742,7 @@ impl BoxedModulePass {
 
 /// `cxx` 桥接使用的函数级 Pass 包装类型，通常不直接构造。
 pub struct BoxedFunctionPass(Box<dyn FunctionPass>);
+
 impl BoxedFunctionPass {
     fn run(&mut self, f: Pin<&mut ffi::Function>) -> PreservedAnalyses {
         match catch_unwind(AssertUnwindSafe(|| {
@@ -611,6 +767,7 @@ type FunctionPipelineParserFn = dyn Fn(&str, &mut FunctionPassManager<'_>) -> bo
 
 /// `cxx` 桥接使用的模块级扩展点回调包装类型，通常不直接构造。
 pub struct BoxedModuleEpCallback(Arc<ModuleEpCallbackFn>);
+
 impl BoxedModuleEpCallback {
     fn call(&self, mpm: Pin<&mut ffi::ModulePassManager>, level: OptLevel) {
         abort_on_panic("ModuleEpCallback", || {
@@ -626,6 +783,7 @@ impl BoxedModuleEpCallback {
 
 /// `cxx` 桥接使用的带 LTO 阶段模块级扩展点回调包装类型，通常不直接构造。
 pub struct BoxedModuleLtoEpCallback(Arc<ModuleLtoEpCallbackFn>);
+
 impl BoxedModuleLtoEpCallback {
     fn call(&self, mpm: Pin<&mut ffi::ModulePassManager>, level: OptLevel, phase: LtoPhase) {
         abort_on_panic("ModuleLtoEpCallback", || {
@@ -641,6 +799,7 @@ impl BoxedModuleLtoEpCallback {
 
 /// `cxx` 桥接使用的函数级扩展点回调包装类型，通常不直接构造。
 pub struct BoxedFunctionEpCallback(Arc<FunctionEpCallbackFn>);
+
 impl BoxedFunctionEpCallback {
     fn call(&self, fpm: Pin<&mut ffi::FunctionPassManager>, level: OptLevel) {
         abort_on_panic("FunctionEpCallback", || {
@@ -656,6 +815,7 @@ impl BoxedFunctionEpCallback {
 
 /// `cxx` 桥接使用的模块级管线解析回调包装类型，通常不直接构造。
 pub struct BoxedModulePipelineParser(Arc<ModulePipelineParserFn>);
+
 impl BoxedModulePipelineParser {
     fn parse(&self, name: &str, mpm: Pin<&mut ffi::ModulePassManager>) -> bool {
         abort_on_panic("ModulePipelineParser", || {
@@ -671,6 +831,7 @@ impl BoxedModulePipelineParser {
 
 /// `cxx` 桥接使用的函数级管线解析回调包装类型，通常不直接构造。
 pub struct BoxedFunctionPipelineParser(Arc<FunctionPipelineParserFn>);
+
 impl BoxedFunctionPipelineParser {
     fn parse(&self, name: &str, fpm: Pin<&mut ffi::FunctionPassManager>) -> bool {
         abort_on_panic("FunctionPipelineParser", || {
@@ -689,7 +850,6 @@ impl BoxedFunctionPipelineParser {
 /// LLVM 18 ~ 21 为 `1`，LLVM 22 为 `2`（新增 `PreCodeGenCallback` 字段）。
 #[cfg(not(feature = "llvm22"))]
 pub const LLVM_PLUGIN_API_VERSION: u32 = 1;
-
 /// 本框架实现的 LLVM Pass Plugin API 版本号。
 ///
 /// LLVM 18 ~ 21 为 `1`，LLVM 22 为 `2`（新增 `PreCodeGenCallback` 字段）。
@@ -801,7 +961,6 @@ macro_rules! export_llvm_plugin {
                     $crate::__internal_with_pass_builder(pb, $register_fn);
                 }
             }
-
             $crate::__internal_build_plugin_info(
                 concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
                 concat!($version, "\0").as_ptr() as *const ::std::ffi::c_char,
