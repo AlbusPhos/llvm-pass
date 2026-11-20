@@ -89,6 +89,25 @@ jobs:
           fi
           echo "FEATURES=$FEATURES" >> "$GITHUB_ENV"
 
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack
+
+      - name: cargo hack feature combinations
+        run: |
+          set -euo pipefail
+          EXCLUDES="default"
+          for v in 18 19 20 21 22; do
+            if [ "$v" != "${{ matrix.llvm }}" ]; then
+              EXCLUDES="$EXCLUDES,llvm$v"
+            fi
+          done
+          cargo hack check --each-feature \
+            --exclude-features "$EXCLUDES" \
+            --features "llvm${{ matrix.llvm }}" \
+            --all-targets --locked
+
       - name: clippy
         run: cargo clippy --all-targets --no-default-features --features "$FEATURES" -- -D warnings
 

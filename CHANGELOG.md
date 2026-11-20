@@ -22,6 +22,7 @@
 - `PreservedAnalyses` 新增 `preserve::<A>()`、`preserve_function_analyses_proxy()`、`is_all` / `is_none` / `is_preserved::<A>()` 链式 API。
 - 演示插件与集成测试覆盖模块/函数级分析的惰性计算、缓存与失效，跨层级 `GlobalsAA` 查询，以及配合 `inkwell` 的基本块查询。
 - 新增 GitHub Actions CI：按 LLVM 18 ~ 22 矩阵运行 clippy 与测试（含 `inkwell` 组合）、MSRV 1.88 检查，以及 docs.rs 配置模拟。
+- CI 增加 `cargo hack` 特性组合检查：每个 LLVM 版本验证基础特性与 `inkwell` 组合均可编译。
 - 新增基于 `v*.*.*` tag 的发布工作流：校验 tag 与 `Cargo.toml` 版本一致后运行测试、发布 crates.io 并创建 GitHub Release。
 
 ### Changed

@@ -227,6 +227,11 @@ cargo test --no-default-features --features llvm22
 # 同时验证可选的 inkwell 集成
 cargo clippy --all-targets --no-default-features --features llvm22,inkwell -- -D warnings
 cargo test --no-default-features --features llvm22,inkwell
+# 可选：用 cargo-hack 检查基础与 inkwell 特性组合（需安装 cargo-hack）
+# 使用其他 LLVM 版本时，将 llvm22 与 exclude 列表同步替换。
+cargo hack check --each-feature \
+  --exclude-features "default,llvm18,llvm19,llvm20,llvm21" \
+  --features llvm22 --all-targets
 # 安装了其他 LLVM 版本时，替换为 llvm18 / llvm19 / llvm20 / llvm21
 ```
 

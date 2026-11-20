@@ -493,7 +493,6 @@ impl BoxedFunctionPipelineParser {
 ///
 /// LLVM 18 ~ 21 为 `1`，LLVM 22 为 `2`（新增 `PreCodeGenCallback` 字段）。
 #[cfg(not(feature = "llvm22"))]
-
 pub const LLVM_PLUGIN_API_VERSION: u32 = 1;
 /// 本框架实现的 LLVM Pass Plugin API 版本号。
 ///
