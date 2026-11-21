@@ -91,8 +91,6 @@ impl FunctionPass for DemoFunctionPass {
 }
 
 export_llvm_plugin! {
-    name: "DemoPassPlugin",
-    version: "0.1.0",
     register: |pb: &mut PassBuilder| {
         // 1. 测试各个编译管线扩展点 (Extension Points)
         pb.register_pipeline_start_ep_callback(|mpm, level| {

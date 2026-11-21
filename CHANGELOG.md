@@ -11,6 +11,17 @@
 
 ---
 
+## [0.3.1] - 2026-11-21
+
+### Added
+
+- `export_llvm_plugin!` 支持省略 `name` / `version`，自动使用 `CARGO_PKG_NAME` 与 `CARGO_PKG_VERSION`。
+- `export_llvm_plugin!` 支持尾随逗号。
+
+### Changed
+
+- 宏的 `name` / `version` 参数改为表达式，并在展开时做 `&str` 类型校验；生成的 C ABI 入口增加 `#[doc(hidden)]` 与 `#[allow(non_snake_case)]`，使用 `core::ffi::c_char`，减少下游警告与路径耦合。
+
 ## [0.3.0] - 2026-11-21
 
 ### Added

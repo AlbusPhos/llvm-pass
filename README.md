@@ -69,6 +69,9 @@ export_llvm_plugin! {
 }
 ```
 
+`export_llvm_plugin!` 的 `name` / `version` 可省略；省略时自动使用当前 crate 的
+`CARGO_PKG_NAME` / `CARGO_PKG_VERSION`，并支持尾随逗号。
+
 ### 配合 `inkwell` 操作 IR（可选）
 
 启用 `inkwell` 特性后，无需在 `Cargo.toml` 中额外引入 `inkwell`，即可通过 `with_inkwell` 或 `as_inkwell` 安全地读写 LLVM IR（底层自动使用 `ManuallyDrop` 保护宿主编译器的模块所有权）：

@@ -673,6 +673,8 @@ where
 /// `clang` / `rustc` 在加载插件时调用。插件工程需将 crate 类型设为 `cdylib`，
 /// 并确保 `llvm-pass` 恰好启用一个 `llvm*` 特性。
 ///
+/// 也可以省略 `name` / `version`，此时自动使用 Cargo 包名与版本。
+///
 /// # Examples
 ///
 /// ```rust
@@ -688,16 +690,31 @@ where
 ///                 PreservedAnalyses::All
 ///             });
 ///         });
-///     }
+///     },
+/// }
+/// ```
+///
+/// 省略 `name` / `version`：
+///
+/// ```rust
+/// use llvm_pass::*;
+///
+/// export_llvm_plugin! {
+///     register: |_pb: &mut PassBuilder| {},
 /// }
 /// ```
 #[macro_export]
 macro_rules! export_llvm_plugin {
     (
-        name: $name:literal,
-        version: $version:literal,
-        register: $register_fn:expr
+        name: $name:expr,
+        version: $version:expr,
+        register: $register_fn:expr $(,)?
     ) => {
+        const _: &str = $name;
+        const _: &str = $version;
+
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
         #[unsafe(no_mangle)]
         pub extern "C" fn llvmGetPassPluginInfo() -> $crate::PassPluginLibraryInfo {
             unsafe extern "C" fn __register_trampoline(pb: *mut $crate::ffi::PassBuilder) {
@@ -708,10 +725,20 @@ macro_rules! export_llvm_plugin {
                 }
             }
             $crate::__internal_build_plugin_info(
-                concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
-                concat!($version, "\0").as_ptr() as *const ::std::ffi::c_char,
+                ::core::concat!($name, "\0").as_ptr() as *const ::core::ffi::c_char,
+                ::core::concat!($version, "\0").as_ptr() as *const ::core::ffi::c_char,
                 __register_trampoline,
             )
+        }
+    };
+
+    (
+        register: $register_fn:expr $(,)?
+    ) => {
+        $crate::export_llvm_plugin! {
+            name: ::core::env!("CARGO_PKG_NAME"),
+            version: ::core::env!("CARGO_PKG_VERSION"),
+            register: $register_fn,
         }
     };
 }
