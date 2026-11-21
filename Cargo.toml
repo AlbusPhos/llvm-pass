@@ -5,9 +5,12 @@ edition = "2024"
 rust-version = "1.88"
 authors = ["AlbusPhos <owo.zzz@proton.me>"]
 description = "A framework for writing LLVM pass plugins in Rust via cxx FFI (LLVM 18-22)"
+documentation = "https://docs.rs/llvm-pass"
 license = "MPL-2.0"
 readme = "README.md"
 repository = "https://github.com/AlbusPhos/llvm-pass"
+keywords = ["llvm", "compiler", "plugin", "pass", "cxx"]
+categories = ["compilers", "development-tools::ffi", "api-bindings"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -31,3 +34,4 @@ cxx-build = "1.0"
 [package.metadata.docs.rs]
 no-default-features = true
 features = ["llvm21", "inkwell"]
+rustdoc-args = ["--cfg", "docsrs"]

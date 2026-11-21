@@ -11,6 +11,13 @@
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- 补齐 crates.io 元数据：新增 `documentation`、`keywords`、`categories`、发布包 `exclude` 与 docs.rs `rustdoc-args`。
+- README 增加 Crates.io、Docs.rs、Downloads 徽章，并将 MSRV / Type / License 徽章链接改为绝对地址。
+
 ## [0.3.1] - 2026-11-21
 
 ### Added

@@ -2,10 +2,13 @@
 
 > A framework for writing LLVM pass plugins in Rust via cxx FFI (LLVM 18-22)
 
+[![Crates.io](https://img.shields.io/crates/v/llvm-pass?logo=rust&logoColor=white)](https://crates.io/crates/llvm-pass)
+[![Docs.rs](https://img.shields.io/docsrs/llvm-pass?logo=docs.rs)](https://docs.rs/llvm-pass)
 [![CI](https://img.shields.io/github/actions/workflow/status/AlbusPhos/llvm-pass/ci.yml?label=CI&logo=githubactions&logoColor=white)](https://github.com/AlbusPhos/llvm-pass/actions/workflows/ci.yml)
-[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue)](Cargo.toml)
-[![Type](https://img.shields.io/badge/Type-Library-informational)](#快速开始-quick-start)
-[![License](https://img.shields.io/crates/l/llvm-pass)](#开源协议-license)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue)](https://github.com/AlbusPhos/llvm-pass/blob/main/Cargo.toml)
+[![Type](https://img.shields.io/badge/Type-Library-informational)](https://github.com/AlbusPhos/llvm-pass#快速开始-quick-start)
+[![Downloads](https://img.shields.io/crates/d/llvm-pass?color=blue)](https://crates.io/crates/llvm-pass)
+[![License](https://img.shields.io/crates/l/llvm-pass)](https://github.com/AlbusPhos/llvm-pass/blob/main/LICENSE)
 
 ---
 
