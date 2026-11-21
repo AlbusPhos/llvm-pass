@@ -172,6 +172,11 @@ export_llvm_plugin! {
                     });
                     true
                 }
+                "demo-native-module" => {
+                    mpm.add_adce();
+                    mpm.add_global_dce();
+                    true
+                }
                 #[cfg(feature = "inkwell")]
                 "demo-inkwell-mod" => {
                     mpm.add_pass(|m: &mut ModuleRef<'_>| {
@@ -214,6 +219,13 @@ export_llvm_plugin! {
                     );
                     PreservedAnalyses::None
                 });
+                return true;
+            }
+
+            if full_name == "demo-native-fn" {
+                fpm.add_adce();
+                fpm.add_simplify_cfg();
+                fpm.add_promote();
                 return true;
             }
 

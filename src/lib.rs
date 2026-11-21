@@ -6,10 +6,15 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod analysis;
+#[cfg(feature = "inkwell")]
+mod inkwell_ext;
 mod ir;
+pub mod ir_utils;
 mod pass;
 
 pub use analysis::*;
+#[cfg(feature = "inkwell")]
+pub use inkwell_ext::*;
 pub use ir::*;
 pub use pass::*;
 
@@ -113,6 +118,10 @@ pub mod ffi {
         #[namespace = "llvm"]
         type BasicBlock;
         #[namespace = "llvm"]
+        type Value;
+        #[namespace = "llvm"]
+        type Instruction;
+        #[namespace = "llvm"]
         type DominatorTree;
         #[namespace = "llvm"]
         type PostDominatorTree;
@@ -130,6 +139,12 @@ pub mod ffi {
             eagerly_invalidate: bool,
         );
         fn fpm_add_function_pass(fpm: Pin<&mut FunctionPassManager>, pass: Box<BoxedFunctionPass>);
+
+        fn mpm_add_adce_pass(mpm: Pin<&mut ModulePassManager>);
+        fn mpm_add_global_dce_pass(mpm: Pin<&mut ModulePassManager>);
+        fn fpm_add_adce_pass(fpm: Pin<&mut FunctionPassManager>);
+        fn fpm_add_simplify_cfg_pass(fpm: Pin<&mut FunctionPassManager>);
+        fn fpm_add_promote_pass(fpm: Pin<&mut FunctionPassManager>);
 
         fn pb_register_pipeline_start_ep(pb: Pin<&mut PassBuilder>, cb: Box<BoxedModuleEpCallback>);
         fn pb_register_pipeline_early_simplification_ep(
@@ -164,6 +179,85 @@ pub mod ffi {
         fn is_function_declaration(f: &Function) -> bool;
         fn module_first_function(m: Pin<&mut Module>) -> *mut Function;
         fn module_next_function(m: Pin<&mut Module>, f: Pin<&mut Function>) -> *mut Function;
+
+        // C++-only IR helpers
+
+        /// # Safety
+        ///
+        /// `inst` 必须是有效的 `llvm::Instruction*`。调用后，同一基本块中位于
+        /// `inst` 及其后的所有指令均被销毁，不得再次访问。
+        unsafe fn ir_change_to_unreachable(inst: *mut Instruction) -> u32;
+        fn ir_delete_function_body(f: Pin<&mut Function>);
+        /// # Safety
+        ///
+        /// `gv` 必须是有效的 `llvm::Value*`；非 `GlobalValue` 时为空操作。
+        unsafe fn ir_set_dso_local(gv: *mut Value, dso_local: bool);
+        /// # Safety
+        ///
+        /// `bb` 与 `split_pt` 必须有效，且 `split_pt` 属于 `bb`。
+        unsafe fn ir_split_basic_block(
+            bb: *mut BasicBlock,
+            split_pt: *mut Instruction,
+            name: &str,
+        ) -> *mut BasicBlock;
+        /// # Safety
+        ///
+        /// `bb` 必须是有效的 `llvm::BasicBlock*`。
+        unsafe fn ir_first_insertion_pt(bb: *mut BasicBlock) -> *mut Instruction;
+        /// # Safety
+        ///
+        /// `bb` 必须是有效的 `llvm::BasicBlock*`。
+        unsafe fn ir_first_non_phi_or_dbg_or_alloca(bb: *mut BasicBlock) -> *mut Instruction;
+        /// # Safety
+        ///
+        /// `inst` 与 `before` 必须是已插入基本块的有效指令。
+        unsafe fn ir_move_inst_before(inst: *mut Instruction, before: *mut Instruction);
+        /// # Safety
+        ///
+        /// `inst` 与 `bb` 必须有效。
+        unsafe fn ir_move_inst_to_first_insertion_pt(inst: *mut Instruction, bb: *mut BasicBlock);
+        /// # Safety
+        ///
+        /// `inst` 必须是有效的 `llvm::Instruction*`；`alloca_pt` 可为空。
+        unsafe fn ir_demote_reg_to_stack(
+            inst: *mut Instruction,
+            volatile_loads: bool,
+            alloca_pt: *mut Instruction,
+        ) -> *mut Instruction;
+        /// # Safety
+        ///
+        /// `phi` 必须是有效的 `llvm::PHINode*`；调用后原 `phi` 被销毁。
+        unsafe fn ir_demote_phi_to_stack(
+            phi: *mut Instruction,
+            alloca_pt: *mut Instruction,
+        ) -> *mut Instruction;
+        /// # Safety
+        ///
+        /// `inst` 必须是有效的 `llvm::Instruction*`。
+        unsafe fn ir_may_throw(inst: *const Instruction) -> bool;
+        /// # Safety
+        ///
+        /// `inst` 必须是有效的 `llvm::Instruction*`。
+        unsafe fn ir_may_have_side_effects(inst: *const Instruction) -> bool;
+        /// # Safety
+        ///
+        /// `inst` 必须是有效的 `llvm::Instruction*`。
+        unsafe fn ir_is_static_alloca(inst: *const Instruction) -> bool;
+        /// # Safety
+        ///
+        /// `inst` 与 `bb` 必须有效。
+        unsafe fn ir_is_used_outside_of_block(
+            inst: *const Instruction,
+            bb: *const BasicBlock,
+        ) -> bool;
+        /// # Safety
+        ///
+        /// `gep` 必须是有效的 `llvm::Instruction*`。
+        unsafe fn ir_gep_index_is_struct(gep: *const Instruction, operand_no: u32) -> bool;
+        /// # Safety
+        ///
+        /// `inst` 必须是有效的 `llvm::Instruction*`；非 `switch` 返回空指针。
+        unsafe fn ir_switch_case_value(inst: *mut Instruction, idx: u32) -> *mut Value;
 
         // ModuleAnalysisManager
         fn mam_get_call_graph<'a>(mam: &'a ModuleAnalysisManager, m: &Module) -> &'a CallGraph;
@@ -335,6 +429,14 @@ pub use ffi::{LtoPhase, OptLevel};
 #[cfg(feature = "inkwell")]
 #[cfg_attr(docsrs, doc(cfg(feature = "inkwell")))]
 pub use inkwell;
+
+/// 重导出 `inkwell::llvm_sys`，便于下游直接调用当前 LLVM 版本对应的底层 C API。
+///
+/// 仅在启用 `inkwell` 特性时可用。请勿在下游再声明不同 LLVM 版本的 `llvm-sys`
+/// 依赖；应通过本重导出使用与 `llvm-pass`、`inkwell` 完全匹配的版本。
+#[cfg(feature = "inkwell")]
+#[cfg_attr(docsrs, doc(cfg(feature = "inkwell")))]
+pub use inkwell::llvm_sys;
 
 #[cold]
 #[inline(never)]

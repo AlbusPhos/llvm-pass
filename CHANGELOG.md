@@ -11,6 +11,20 @@
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- 重导出 `llvm_sys`（启用 `inkwell` 时），下游无需额外声明 `llvm-sys` 依赖即可使用匹配的 LLVM C API。
+- 新增 `ir_utils` 与 `inkwell_ext` 模块：`ir_utils` 提供必须复用 LLVM C++ 实现的裸指针辅助函数；`inkwell_ext` 提供 `AnyValueExt`、`InstructionExt`、`BasicBlockExt`、`GlobalValueExt`、`FunctionExt`、`ModuleExt` 等扩展 Trait。
+- 新增原生 LLVM Pass 挂载接口：`ModulePassManager::add_adce`、`add_global_dce`，以及 `FunctionPassManager::add_adce`、`add_simplify_cfg`、`add_promote`。
+- 新增 `tests/test_inkwell_ext.rs`，覆盖 Call/Invoke/CallBr 操作数布局、LLVM 22 switch case、token、operand bundle、内联汇编、GEP、DataLayout、PHI 降级等跨版本行为。
+
+### Fixed
+
+- 修正 `CallBase` 操作数分类：`InvokeInst` / `CallBrInst` 的 normal/unwind/default/indirect 目标不是 bundle 操作数。
+- 统一封装 LLVM 18–22 的 `SwitchInst` case value 差异，避免 LLVM 22 上按旧操作数布局读取 case value。
+
 ## [0.2.0] - 2026-11-20
 
 ### Added

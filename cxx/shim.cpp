@@ -7,6 +7,14 @@
 
 #include "llvm/Config/llvm-config.h"
 #include <iterator>
+#include <optional>
+
+#include "llvm/IR/GetElementPtrTypeIterator.h"
+#include "llvm/Transforms/IPO/GlobalDCE.h"
+#include "llvm/Transforms/Scalar/ADCE.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/Mem2Reg.h"
 
 // `PassPlugin.h` 在 LLVM 22 才迁移到 `llvm/Plugins/` 目录
 #if LLVM_VERSION_MAJOR >= 22
@@ -183,6 +191,26 @@ void fpm_add_function_pass(FunctionPassManager &FPM, rust::Box<BoxedFunctionPass
     FPM.addPass(RustFunctionPassProxy(std::move(pass)));
 }
 
+void mpm_add_adce_pass(ModulePassManager &MPM) {
+    MPM.addPass(createModuleToFunctionPassAdaptor(ADCEPass()));
+}
+
+void mpm_add_global_dce_pass(ModulePassManager &MPM) {
+    MPM.addPass(GlobalDCEPass());
+}
+
+void fpm_add_adce_pass(FunctionPassManager &FPM) {
+    FPM.addPass(ADCEPass());
+}
+
+void fpm_add_simplify_cfg_pass(FunctionPassManager &FPM) {
+    FPM.addPass(SimplifyCFGPass());
+}
+
+void fpm_add_promote_pass(FunctionPassManager &FPM) {
+    FPM.addPass(PromotePass());
+}
+
 void pb_register_pipeline_start_ep(PassBuilder &PB, rust::Box<BoxedModuleEpCallback> cb) {
     CopyableCallback<BoxedModuleEpCallback> wrapper(std::move(cb));
     PB.registerPipelineStartEPCallback(
@@ -292,6 +320,123 @@ Function *module_next_function(Module &M, Function &F) {
     auto It = F.getIterator();
     ++It;
     return It == M.end() ? nullptr : &*It;
+}
+
+// === C++ 专属 IR 变换与查询实现 ===
+
+uint32_t ir_change_to_unreachable(Instruction *I) {
+    return static_cast<uint32_t>(llvm::changeToUnreachable(I));
+}
+
+void ir_delete_function_body(Function &F) {
+    F.dropAllReferences();
+    F.deleteBody();
+}
+
+void ir_set_dso_local(Value *GV, bool dso_local) {
+    if (auto *GVal = dyn_cast_or_null<GlobalValue>(GV)) {
+        GVal->setDSOLocal(dso_local);
+    }
+}
+
+BasicBlock *ir_split_basic_block(BasicBlock *BB, Instruction *SplitPt, rust::Str Name) {
+    StringRef NameRef(Name.data(), Name.size());
+    return BB->splitBasicBlock(SplitPt->getIterator(), NameRef);
+}
+
+Instruction *ir_first_insertion_pt(BasicBlock *BB) {
+    auto It = BB->getFirstInsertionPt();
+    return It == BB->end() ? nullptr : &*It;
+}
+
+Instruction *ir_first_non_phi_or_dbg_or_alloca(BasicBlock *BB) {
+    auto It = BB->getFirstNonPHIOrDbgOrAlloca();
+    return It == BB->end() ? nullptr : &*It;
+}
+
+void ir_move_inst_before(Instruction *I, Instruction *Before) {
+    I->moveBefore(*Before->getParent(), Before->getIterator());
+}
+
+void ir_move_inst_to_first_insertion_pt(Instruction *I, BasicBlock *BB) {
+    auto InsertPt = BB->getFirstInsertionPt();
+    if (InsertPt == BB->end()) {
+        return;
+    }
+    I->moveBefore(*BB, InsertPt);
+}
+
+Instruction *ir_demote_reg_to_stack(
+    Instruction *I, bool volatile_loads, Instruction *alloca_pt) {
+#if LLVM_VERSION_MAJOR >= 19
+    std::optional<BasicBlock::iterator> Pt = std::nullopt;
+    if (alloca_pt) {
+        Pt = alloca_pt->getIterator();
+    }
+    return llvm::DemoteRegToStack(*I, volatile_loads, Pt);
+#else
+    return llvm::DemoteRegToStack(*I, volatile_loads, alloca_pt);
+#endif
+}
+
+Instruction *ir_demote_phi_to_stack(Instruction *Phi, Instruction *alloca_pt) {
+    auto *PN = dyn_cast<PHINode>(Phi);
+    if (!PN) {
+        return nullptr;
+    }
+#if LLVM_VERSION_MAJOR >= 19
+    std::optional<BasicBlock::iterator> Pt = std::nullopt;
+    if (alloca_pt) {
+        Pt = alloca_pt->getIterator();
+    }
+    return llvm::DemotePHIToStack(PN, Pt);
+#else
+    return llvm::DemotePHIToStack(PN, alloca_pt);
+#endif
+}
+
+bool ir_may_throw(const Instruction *I) {
+    return I->mayThrow();
+}
+
+bool ir_may_have_side_effects(const Instruction *I) {
+    return I->mayHaveSideEffects();
+}
+
+bool ir_is_static_alloca(const Instruction *I) {
+    if (const auto *AI = dyn_cast<AllocaInst>(I)) {
+        return AI->isStaticAlloca();
+    }
+    return false;
+}
+
+bool ir_is_used_outside_of_block(const Instruction *I, const BasicBlock *BB) {
+    return I->isUsedOutsideOfBlock(BB);
+}
+
+bool ir_gep_index_is_struct(const Instruction *GEP, uint32_t operand_no) {
+    const auto *GEPInst = dyn_cast<GetElementPtrInst>(GEP);
+    if (!GEPInst || operand_no == 0 || operand_no >= GEPInst->getNumOperands()) {
+        return false;
+    }
+    uint32_t cur_op = 1;
+    for (auto GTI = gep_type_begin(GEPInst), GTE = gep_type_end(GEPInst);
+         GTI != GTE; ++GTI, ++cur_op) {
+        if (cur_op == operand_no) {
+            return GTI.isStruct();
+        }
+    }
+    return false;
+}
+
+Value *ir_switch_case_value(Instruction *I, uint32_t idx) {
+    auto *SI = dyn_cast<SwitchInst>(I);
+    if (!SI || idx >= SI->getNumCases()) {
+        return nullptr;
+    }
+    auto It = SI->case_begin();
+    std::advance(It, idx);
+    return It->getCaseValue();
 }
 
 // === ModuleAnalysisManager 实现 ===

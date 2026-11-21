@@ -14,6 +14,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -36,6 +37,13 @@ void mpm_add_module_pass(llvm::ModulePassManager &MPM, rust::Box<BoxedModulePass
 void mpm_add_function_pass(llvm::ModulePassManager &MPM, rust::Box<BoxedFunctionPass> pass, bool eagerly_invalidate);
 void fpm_add_function_pass(llvm::FunctionPassManager &FPM, rust::Box<BoxedFunctionPass> pass);
 
+// === 原生 LLVM Pass 挂载接口 ===
+void mpm_add_adce_pass(llvm::ModulePassManager &MPM);
+void mpm_add_global_dce_pass(llvm::ModulePassManager &MPM);
+void fpm_add_adce_pass(llvm::FunctionPassManager &FPM);
+void fpm_add_simplify_cfg_pass(llvm::FunctionPassManager &FPM);
+void fpm_add_promote_pass(llvm::FunctionPassManager &FPM);
+
 // === PassBuilder 扩展点 (Extension Points) 注册接口 ===
 void pb_register_pipeline_start_ep(llvm::PassBuilder &PB, rust::Box<BoxedModuleEpCallback> cb);
 void pb_register_pipeline_early_simplification_ep(llvm::PassBuilder &PB, rust::Box<BoxedModuleLtoEpCallback> cb);
@@ -54,6 +62,33 @@ rust::Str get_function_name(const llvm::Function &F);
 bool is_function_declaration(const llvm::Function &F);
 llvm::Function *module_first_function(llvm::Module &M);
 llvm::Function *module_next_function(llvm::Module &M, llvm::Function &F);
+
+// === C++ 专属 IR 变换与查询辅助函数 ===
+uint32_t ir_change_to_unreachable(llvm::Instruction *I);
+void ir_delete_function_body(llvm::Function &F);
+void ir_set_dso_local(llvm::Value *GV, bool dso_local);
+
+llvm::BasicBlock *ir_split_basic_block(
+    llvm::BasicBlock *BB, llvm::Instruction *SplitPt, rust::Str Name);
+llvm::Instruction *ir_first_insertion_pt(llvm::BasicBlock *BB);
+llvm::Instruction *ir_first_non_phi_or_dbg_or_alloca(llvm::BasicBlock *BB);
+void ir_move_inst_before(llvm::Instruction *I, llvm::Instruction *Before);
+void ir_move_inst_to_first_insertion_pt(llvm::Instruction *I, llvm::BasicBlock *BB);
+
+llvm::Instruction *ir_demote_reg_to_stack(
+    llvm::Instruction *I, bool volatile_loads, llvm::Instruction *alloca_pt);
+llvm::Instruction *ir_demote_phi_to_stack(
+    llvm::Instruction *Phi, llvm::Instruction *alloca_pt);
+
+bool ir_may_throw(const llvm::Instruction *I);
+bool ir_may_have_side_effects(const llvm::Instruction *I);
+bool ir_is_static_alloca(const llvm::Instruction *I);
+bool ir_is_used_outside_of_block(const llvm::Instruction *I, const llvm::BasicBlock *BB);
+bool ir_gep_index_is_struct(const llvm::Instruction *GEP, uint32_t operand_no);
+
+// LLVM 18-21 需要从操作数取 Switch case value；LLVM 22 的 case value 不在操作数中，
+// 由该辅助函数统一屏蔽版本差异。
+llvm::Value *ir_switch_case_value(llvm::Instruction *I, uint32_t idx);
 
 // === ModuleAnalysisManager 查询与失效接口 ===
 const llvm::CallGraph &mam_get_call_graph(

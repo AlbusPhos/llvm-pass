@@ -121,6 +121,33 @@ fn main() {
 
     let llvm_ver = selected_llvm_version();
     let llvm_config = find_llvm_config(llvm_ver);
+    let libdir = run_llvm_config(&llvm_config, "--libdir");
+
+    // 集成测试会直接调用 LLVM C API（IR 扩展测试）。库本身保持
+    // `no-llvm-linking`，仅给测试可执行文件链接共享 libLLVM，避免把
+    // LLVM 符号强行链接进插件 cdylib。该步骤是 best-effort：某些 LLVM
+    // 发行版只提供静态库，不应因此影响正常库构建。
+    if env::var("CARGO_CFG_TARGET_FAMILY").as_deref() == Ok("unix") {
+        println!("cargo:rustc-link-arg-tests=-L{libdir}");
+        println!("cargo:rustc-link-arg-tests=-Wl,-rpath,{libdir}");
+        match Command::new(&llvm_config)
+            .args(["--link-shared", "--libs", "core"])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                for flag in String::from_utf8_lossy(&output.stdout).split_whitespace() {
+                    println!("cargo:rustc-link-arg-tests={flag}");
+                }
+            }
+            Ok(_) => println!(
+                "cargo:warning=`{:?} --link-shared --libs` failed; IR extension integration tests may need manual LLVM linking",
+                llvm_config
+            ),
+            Err(error) => {
+                println!("cargo:warning=failed to query LLVM shared libraries for tests: {error}")
+            }
+        }
+    }
 
     let includedir = run_llvm_config(&llvm_config, "--includedir");
     let cflags = run_llvm_config(&llvm_config, "--cxxflags");

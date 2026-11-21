@@ -174,6 +174,19 @@ impl<'a> ModulePassManager<'a> {
             true,
         );
     }
+
+    /// 追加原生 LLVM `ADCEPass`（通过 `ModuleToFunctionPassAdaptor`）。
+    ///
+    /// 这是原生 C++ Pass，不经过 Rust [`ModulePass`] / [`FunctionPass`] 包装；
+    /// 如需在自定义管线中等价于 `adce`，可直接调用本方法。
+    pub fn add_adce(&mut self) {
+        ffi::mpm_add_adce_pass(self.0.as_mut());
+    }
+
+    /// 追加原生 LLVM `GlobalDCEPass`。
+    pub fn add_global_dce(&mut self) {
+        ffi::mpm_add_global_dce_pass(self.0.as_mut());
+    }
 }
 
 /// `llvm::FunctionPassManager` 的借用封装，用于挂载函数级 Pass。
@@ -185,6 +198,21 @@ impl<'a> FunctionPassManager<'a> {
     /// 向函数级管线追加一个 [`FunctionPass`]。
     pub fn add_pass<P: FunctionPass>(&mut self, pass: P) {
         ffi::fpm_add_function_pass(self.0.as_mut(), Box::new(BoxedFunctionPass(Box::new(pass))));
+    }
+
+    /// 追加原生 LLVM `ADCEPass`。
+    pub fn add_adce(&mut self) {
+        ffi::fpm_add_adce_pass(self.0.as_mut());
+    }
+
+    /// 追加原生 LLVM `SimplifyCFGPass`。
+    pub fn add_simplify_cfg(&mut self) {
+        ffi::fpm_add_simplify_cfg_pass(self.0.as_mut());
+    }
+
+    /// 追加原生 LLVM `PromotePass`（`mem2reg`）。
+    pub fn add_promote(&mut self) {
+        ffi::fpm_add_promote_pass(self.0.as_mut());
     }
 }
 

@@ -48,6 +48,15 @@ jobs:
           - llvm: "22"
             rustc: "1.98.0"
             inkwell: false
+          - llvm: "18"
+            rustc: "1.79.0"
+            inkwell: true
+          - llvm: "19"
+            rustc: "1.82.0"
+            inkwell: true
+          - llvm: "20"
+            rustc: "1.88.0"
+            inkwell: true
           - llvm: "21"
             rustc: "1.92"
             inkwell: true

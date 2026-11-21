@@ -23,7 +23,7 @@ LLVM 版本通过 Cargo 特性选择（`llvm18` ~ `llvm22`），默认启用 `ll
 llvm-pass = "0.2"
 # 或显式选择其他 LLVM 版本（必须与宿主工具链一致）
 # llvm-pass = { version = "0.2", default-features = false, features = ["llvm18"] }
-# 可选：启用 inkwell 互操作层（LLVM 版本会自动匹配，并重导出 llvm_pass::inkwell）
+# 可选：启用 inkwell 互操作层（LLVM 版本会自动匹配，并重导出 llvm_pass::inkwell 与 llvm_pass::llvm_sys）
 # llvm-pass = { version = "0.2", features = ["inkwell"] }
 # llvm-pass = { version = "0.2", default-features = false, features = ["llvm21", "inkwell"] }
 ```
@@ -161,6 +161,80 @@ assert!(pa.is_preserved::<LoopAnalysis>());
 ```
 
 - `CallGraphAnalysis` 等可失效的模块级分析只能通过 `ModuleRef` 查询；跨层级入口 `FunctionRef::cached_module_analysis` 仅适用于 LLVM 的"永不失效"模块分析（内置实现为 `GlobalsAA`），否则 LLVM 调试构建会触发 `Cached result cannot be invalidated` 断言。
+
+## IR 扩展与原生 Pass
+
+启用 `inkwell` 后，本框架还提供一组扩展 Trait，用于访问 `inkwell` 未封装的 LLVM 能力（token 类型、operand bundle、switch 后加 case、内联汇编、DataLayout 指针宽度等）：
+
+```rust
+use llvm_pass::*;
+
+#[cfg(feature = "inkwell")]
+fn inspect_function(func: &mut FunctionRef<'_>) {
+    func.with_inkwell(|iw_fn, _ctx| {
+        if let Some(entry) = iw_fn.get_first_basic_block() {
+            if let Some(first) = entry.get_first_instruction() {
+                // token 类型不会触发 inkwell 的 AnyTypeEnum panic
+                let _is_token = first.is_token_type();
+                let _has_token = first.has_token();
+            }
+
+            // 跳过 PHI / 静态 alloca 的首个指令插入点
+            let _insertion = entry.first_non_phi_or_dbg_or_alloca();
+        }
+    });
+}
+```
+
+可用的扩展 Trait：
+
+- `AnyValueExt`：把 `BasicValueUse::get_user()` 返回的 `AnyValueEnum` 还原为 `InstructionValue`。
+- `InstructionExt`：操作数分类、switch、内联汇编、`DemoteRegToStack`、`changeToUnreachable` 等。
+- `BasicBlockExt`：`splitBasicBlock`、首个插入点查询。
+- `GlobalValueExt` / `FunctionExt`：清空 Comdat、`dso_local`、删除函数体。
+- `ModuleExt`：获取 DataLayout 对应的指针宽度整数类型。
+
+需要直接调用 LLVM C API 时，可通过 `llvm_pass::llvm_sys` 使用与当前版本匹配的 `llvm-sys`：
+
+```rust
+#[cfg(feature = "inkwell")]
+fn inspect_type(value: llvm_pass::llvm_sys::prelude::LLVMValueRef) {
+    use llvm_pass::llvm_sys::core::{LLVMGetTypeKind, LLVMTypeOf};
+    let _kind = unsafe { LLVMGetTypeKind(LLVMTypeOf(value)) };
+}
+```
+
+> `llvm_pass::llvm_sys` 仅在启用 `inkwell` 特性时可用。请勿在下游额外声明不同 LLVM 版本的 `llvm-sys` 依赖。
+
+原生 LLVM Pass 可直接挂载：
+
+```rust
+use llvm_pass::*;
+
+fn register(pb: &mut PassBuilder) {
+    pb.register_module_pipeline_parsing_callback(|name, mpm| {
+        if name == "my-cleanup" {
+            mpm.add_adce();
+            mpm.add_global_dce();
+            true
+        } else {
+            false
+        }
+    });
+
+    pb.register_function_pipeline_parsing_callback(|name, fpm| {
+        if name == "my-function-cleanup" {
+            fpm.add_simplify_cfg();
+            fpm.add_promote();
+            true
+        } else {
+            false
+        }
+    });
+}
+```
+
+无 `inkwell` 场景仍可使用 `llvm_pass::ir_utils` 中的 C++ 裸指针辅助函数；这些函数全部是 `unsafe` 的，调用方必须保证 LLVM 对象生命周期与类型正确。
 
 ## LLVM 版本特性 (LLVM Version Features)
 

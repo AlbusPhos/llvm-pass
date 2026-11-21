@@ -72,6 +72,16 @@ fn resolve_rustc_toolchain() -> Option<String> {
 }
 
 #[test]
+fn test_ir_utils_path_is_exported() {
+    use llvm_pass::ir_utils;
+
+    // 只验证公开路径与函数签名存在，不实际调用裸指针接口。
+    let _ = ir_utils::may_throw as unsafe fn(*const std::ffi::c_void) -> bool;
+    let _ = ir_utils::split_block
+        as unsafe fn(*mut std::ffi::c_void, *mut std::ffi::c_void, &str) -> *mut std::ffi::c_void;
+}
+
+#[test]
 fn test_split_parametrized_pass_name() {
     assert_eq!(split_parametrized_pass_name("bcf"), Some(("bcf", None)));
     assert_eq!(
@@ -384,6 +394,33 @@ fn test_rustc_llvm_plugin_integration() {
     assert!(output.status.success(), "`rustc` failed:\n{}", stderr);
     assert!(stderr.contains("[TRACE] EP::PipelineStart level=O2"));
     assert!(stderr.contains("[TRACE] ClosureFunctionPass::run func=compute_rust"));
+}
+
+#[test]
+fn test_native_llvm_passes_can_be_attached() {
+    let plugin = get_plugin_dylib();
+    let ir_file = demo_src("c.ll");
+    let opt_bin = llvm_tool("opt");
+
+    let output = Command::new(&opt_bin)
+        .arg(format!("-load-pass-plugin={}", plugin.display()))
+        .arg("-passes=demo-native-module,function(demo-native-fn)")
+        .arg("-disable-output")
+        .arg(&ir_file)
+        .output()
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to execute {:?} for native pass test: {}",
+                opt_bin, e
+            )
+        });
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "`opt-{LLVM_VERSION_MAJOR}` native pipeline failed:\n{}",
+        stderr
+    );
 }
 
 #[cfg(feature = "inkwell")]
